@@ -1350,6 +1350,7 @@ class TrainingArguments:
 
                         if "split_param" in sharding_parallel_config:
                             strategy.hybrid_configs["sharding_configs"].split_param = True
+                            assert self.amp_master_grad, "Currently sharding stage1 v2 only support amp_master_grad"
 
                         if "enable_release_grads" in sharding_parallel_config:
                             strategy.hybrid_configs["sharding_configs"].release_gradients = True
