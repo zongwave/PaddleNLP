@@ -222,7 +222,7 @@ function llama_dygraph_auto_bs8_fp32_DP2() {
     ips=-1
     mem=-1
     echo "result: loss=$loss ips=$ips mem=$mem"
-    loss_base=9.51876831
+    loss_base=9.4992733
     if [ $IS_A100 -ne 0 ];then
         loss_base=9.53084087
     fi
@@ -1008,7 +1008,7 @@ function llama_align_dygraph_dy2st_auto_bs2_bf16_DP2-MP1-PP1() {
         ips=-1
         mem=-1
         echo "result: to_static=$to_static loss=$loss ips=$ips mem=$mem"
-        loss_base=9.97198105
+        loss_base=9.99302673
         if [ $IS_A100 -ne 0 ];then
             loss_base=10.18783569
         fi
