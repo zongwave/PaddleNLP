@@ -36,6 +36,8 @@ from paddlenlp.datasets import (
 )
 from paddlenlp.metrics import BLEU, Rouge1, Rouge2, RougeL
 from paddlenlp.peft import (
+    LoKrConfig,
+    LoKrModel,
     LoRAConfig,
     LoRAModel,
     PrefixConfig,
@@ -451,6 +453,21 @@ def main():
 
         model.print_trainable_parameters()
 
+    if model_args.lokr:
+        if model_args.lokr_path is None:
+            target_modules = get_lora_target_modules(model)
+            lokr_config = LoKrConfig(
+                target_modules=target_modules,
+                lokr_dim=model_args.lokr_dim,
+                dtype=dtype,
+                base_model_name_or_path=model_args.model_name_or_path,
+            )
+            model = LoKrModel(model, lokr_config)
+        else:
+            model = LoKrModel.from_pretrained(model=model, lokr_path=model_args.lokr_path)
+
+        # For debugging purpose, you can print the model to see which layer is transformed into a lokr layer
+        # print(model)
     if model_args.reft:
         intervention_dtype = dtype
         intervention_params = {
