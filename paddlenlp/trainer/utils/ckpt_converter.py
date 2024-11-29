@@ -270,7 +270,7 @@ class CheckpointConverter:
             malloc_size = 0
             for opt_state_name, opt_state_value in optimizer_state_dict.items():
                 malloc_size += opt_state_value.numel() * opt_state_value.element_size()
-            malloc_size = malloc_size.numpy() / 2**20
+            malloc_size = malloc_size / 2**20
             logger.debug(f"{malloc_size} MB of GPU memory were allocated.")
 
             # merge sharding
@@ -555,7 +555,7 @@ class CheckpointConverter:
             for k, v in state_dict.items():
                 memory_size += v.numel() * v.element_size()
 
-        memory_size = memory_size.numpy() / 2**20
+        memory_size = memory_size / 2**20
         logger.debug(
             f"The current rank has finished loading the checkpoint file and has allocated {memory_size} MB of GPU memory."
         )
