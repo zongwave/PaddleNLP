@@ -733,10 +733,9 @@ class DygraphInferencePredictor(InferencePredictorMixin):
                 inputs[key] = paddle.to_tensor(inputs[key])
 
         inputs["cache_kvs"] = self.cache_kvs
-        self.model.generate(
+        return self.model.generate(
             **inputs,
         )
-        return None
 
 
 class BlockInferencePredictorMixin(BasePredictor):
@@ -914,6 +913,12 @@ class BlockInferencePredictorMixin(BasePredictor):
             self.model_inputs["rope_emb"] = paddle.concat([src_mask.reshape([-1]), tgt_mask.reshape([-1])])
 
     def _preprocess(self, input_text: list[str]):
+        len_input_text = len(input_text)
+        if len_input_text < self.batch_size:
+            padding_len = self.batch_size - len_input_text
+            input_text += [""] * padding_len
+            assert len(input_text) == self.batch_size
+
         if self.tokenizer.chat_template is not None:
             input_text = [input_text] if isinstance(input_text, str) else input_text
             input_text = [self.tokenizer.apply_chat_template(sentence, tokenize=False) for sentence in input_text]
@@ -1073,7 +1078,7 @@ class DygraphBlockInferencePredictor(BlockInferencePredictorMixin):
         if self.tensor_parallel_rank == 0:
             outputs = []
             output_tokens = []
-            while len(outputs) < self.batch_size:
+            while len(outputs) < len(input_texts):
                 result = result_queue.get(timeout=1)
                 outputs.append(result[-1])
                 output_tokens.append(result[-2])
