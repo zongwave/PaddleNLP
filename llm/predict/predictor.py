@@ -581,9 +581,8 @@ class InferencePredictorMixin(BasePredictor):
                 length = inputs["seq_len_encoder"][i][0]
                 if self.attention_mask is not None:
                     self.attention_mask[i, 0, :length, :length] = paddle.tril(
-                        paddle.ones(shape=(length, length), dtype=self.config.dtype)
+                        paddle.ones(shape=(1, 1, length, length), dtype=self.config.dtype)
                     )
-
                 if pre_caches_length > 0:
                     if self.config.prefix_path is None:
                         prefix_attention_mask = paddle.zeros(
@@ -1295,6 +1294,7 @@ def create_predictor(
 ):
     tokenizer = AutoTokenizer.from_pretrained(
         predictor_args.model_name_or_path,
+        padding_side="left"
     )
     # init chat_template for tokenizer
     llm_utils.init_chat_template(tokenizer, predictor_args.model_name_or_path, predictor_args.chat_template)
@@ -1304,7 +1304,6 @@ def create_predictor(
         tokenizer.pad_token = tokenizer.eos_token
 
     config = AutoConfig.from_pretrained(predictor_args.model_name_or_path)
-
     max_position_embeddings = llm_utils.get_model_max_position_embeddings(config)
     if max_position_embeddings is None:
         max_position_embeddings = predictor_args.src_length + predictor_args.max_length

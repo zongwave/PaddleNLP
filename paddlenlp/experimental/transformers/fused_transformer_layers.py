@@ -22,9 +22,9 @@ import paddle
 import paddle.distributed as dist
 from paddle.framework import in_dynamic_mode
 from paddle.incubate.nn.functional import (
-    fused_bias_act,
+    # fused_bias_act,
     fused_layer_norm,
-    fused_moe,
+    # fused_moe,
     fused_rms_norm,
     masked_multihead_attention,
     variable_length_memory_efficient_attention,
@@ -45,7 +45,8 @@ if not is_paddlenlp_ops_available():
 if (
     paddle.device.get_all_custom_device_type() is not None and len(paddle.device.get_all_custom_device_type()) > 0
 ) or paddle.is_compiled_with_cuda():
-    from paddlenlp_ops import rebuild_padding_v2
+    # from paddlenlp_ops import rebuild_padding_v2
+    pass
 
 
 def use_cutlass_fp8_gemm():
@@ -73,6 +74,9 @@ if paddle.is_compiled_with_cuda():
         )
     except:
         pass
+
+def rebuild_padding(tmp_out, padding_offset, seq_len_encoder, input_ids=0):
+    return tmp_out[:,-1,:]
 
 __all__ = [
     "MoeConfig",
@@ -142,6 +146,9 @@ class SpeculateConfig:
     speculate_max_draft_token_num: int = 5
     speculate_method: str = None
 
+@dataclass
+class HpuConfig:
+    max_position_embeddings: int = 0
 
 class FusedMultiTransformerConfig:
     def __init__(
@@ -208,6 +215,7 @@ class FusedMultiTransformerConfig:
         moe_config=MoeConfig(),
         avx_config=AvxConfig(),
         speculate_config=SpeculateConfig(),
+        hpu_config=HpuConfig(),
     ):
         self.embed_dim = embed_dim
         self.num_heads = num_heads
@@ -286,6 +294,7 @@ class FusedMultiTransformerConfig:
         self.moe_config = moe_config
         self.avx_config = avx_config
         self.speculate_config = speculate_config
+        self.hpu_config = hpu_config
 
 
 class FusedMultiTransformerBase(Layer):
@@ -2930,3 +2939,226 @@ class FusedBlockMultiTransformerFP8(FusedBlockMultiTransformer):
                 residual=residual_input,
             )[0]
         return tmp_out, residual_input
+
+from paddlenlp.transformers.llama import fusion_ops
+from paddlenlp.transformers.llama.modeling import LlamaRotaryEmbedding
+
+class FusedMultiTransformerHPU(FusedMultiTransformerBase):
+    def __init__(self, config: FusedMultiTransformerConfig):
+        super().__init__(config)
+        
+        self.config = config
+
+        self.rotary_emb = LlamaRotaryEmbedding(
+            self.head_dim,
+            max_position_embeddings=self.config.hpu_config.max_position_embeddings,
+            base=self.config.rope_theta,
+        )
+        
+    def forward(
+        self,
+        input_ids,
+        src,
+        cum_offsets=None,
+        padding_offset=None,
+        attn_mask=None,
+        caches=None,
+        pre_caches=None,
+        pre_caches_length=0,
+        rotary_embs=None,
+        rotary_emb_dims=0,
+        seq_lens=None,
+        time_step=None,
+        **kwargs,
+    ):
+        # TODO 1: caches update
+        # TODO 2: RmsNormKernel optional residual_input not realized
+        # TODO 3: RmsNormKernel begin_norm_axis = hidden_states.dim() - 1
+        
+        if caches is not None:
+            assert len(caches) == len(self.qkv_weights) or len(caches) == 2 * len(self.qkv_weights)
+
+        assert self.num_layers == len(self.qkv_weights)
+
+        residual_input = src
+        
+        for i in range(self.num_layers):
+            # LlamaDecoderLayer
+            # layer_outputs = decoder_layer(...)
+            
+            # input_layernorm
+            # (Pdb) p src.shape
+            # [1, 34, 4096]
+
+            ##### Fused-OP-1 start
+
+            # ln_out = fusion_ops.fusion_rms_norm(
+            #     src, self.ln_scales[i], self._epsilon
+            # )
+            hidden_states = fused_rms_norm(
+                src,                            # x           [1, 34, 4096]
+                norm_weight=self.ln_scales[i],  # norm_weight [4096]
+                norm_bias=self.ln_biases[i],    #             None
+                epsilon=self._epsilon,          # epsilon     1e-06
+                begin_norm_axis=2,              # compute_ffn_layernorm ---> hidden_states.dim() - 1
+            )[0]
+
+            # (Pdb) p hidden_states.shape
+            # [1, 34, 4096]
+
+            # self_attn
+            qkv_out = paddle.matmul(hidden_states, self.qkv_weights[i], False, True)
+            # (Pdb) p qkv_out.shape = [1, 34, 12288]
+            # 12288 = 4096 * 3
+            # (Pdb) p (self.qkv_weights[0].shape)
+            # [12288, 4096]
+            if self.qkv_biases[i] is not None:
+                qkv_out = paddle.add(qkv_out, self.qkv_biases[i])
+            
+            num_groups = self.num_heads // self.kv_num_heads
+            target_shape = [0, 0, (num_groups + 2) * self.kv_num_heads, self.head_dim]
+            qkv_out = paddle.reshape_(qkv_out, target_shape)
+            qkv_out = paddle.transpose(qkv_out, [0, 2, 1, 3])
+            query_states, key_states, value_states = paddle.split(
+                qkv_out,
+                # [32, 32, 32]
+                num_or_sections=[self.num_heads, self.kv_num_heads, self.kv_num_heads],
+                axis=1,
+            )
+            # (Pdb) p query_states.shape, key_states.shape, value_states.shape
+            # [1, 32, 34, 128]  [1, 32, 34, 128]  [1, 32, 34, 128]
+            
+            # (Pdb) p rotary_embs
+            # Tensor(shape=[34], dtype=float32, place=Place(intel_hpu:5), stop_gradient=True,
+            #        [0. , 1. , 2. , 3. , 4. , 5. , 6. , 7. , 8. , 9. , 10., 11., 12., 13.,
+
+            # (Pdb) p position_ids
+            # Tensor(shape=[1, 34], dtype=float32, place=Place(intel_hpu:5), stop_gradient=True,
+            #        [[0. , 1. , 2. , 3. , 4. , 5. , 6. , 7. , 8. , 9. , 10., 11., 12., 13.,
+
+            position_ids = rotary_embs.expand(input_ids.shape)
+
+            past_key_value = None
+            query_states, key_states = fusion_ops.fusion_rope(
+                query_states.transpose([0, 2, 1, 3]), 
+                key_states.transpose([0, 2, 1, 3]),   
+                value_states.transpose([0, 2, 1, 3]),
+                hidden_states,
+                position_ids,
+                past_key_value,
+                self.rotary_emb,
+            )
+            # (Pdb) p key_states.shape, value_states.shape
+            # [1, 32, 34, 128]  [1, 32, 34, 128]
+
+            ##### Fused-OP-1 end
+
+            ##### Fused-OP-2 start
+
+            # import pdb;pdb.set_trace()
+
+            #(Pdb) p len(caches), caches[0].shape 
+            #32  [2, 1, 32, 4096, 128]
+
+            # write cache kv (inplace)
+            if time_step is None:  # context
+                caches[i][0][:, :, :key_states.shape[1], :] = key_states.transpose([0, 2, 1, 3])
+                caches[i][1][:, :, :value_states.shape[2], :] = value_states
+            else:
+                import paddlenlp_ops
+                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=time_step, source=key_states.transpose([0, 2, 1, 3]))
+                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=time_step, source=value_states.transpose([0, 2, 1, 3]))
+            
+            ##### Fused-OP-2 end
+
+            ##### Fused-OP-3 start
+
+            # (Pdb) p attn_mask
+            # Tensor(shape=[1, 1, 4096, 4096], dtype=float16, place=Place(intel_hpu:5), stop_gradient=True,
+            kv_seq_len = key_states.shape[-3]
+            attention_mask = attn_mask[..., :kv_seq_len,:kv_seq_len]
+            out_linear_out = fusion_ops.fusion_flash_attention(
+                query_states,
+                None,
+                key_states,
+                value_states.transpose([0, 2, 1, 3]),
+                attention_mask,
+                output_attentions = False,
+            )
+            # out_linear_out = Tensor(shape=[1, 34, 4096], dtype=float16, place=Place(intel_hpu:5), stop_gradient=True,
+
+            # o_proj
+            # self.linear_weights[i].shape = [4096, 4096]
+            out_linear_out = paddle.matmul(out_linear_out, self.linear_weights[i])
+        
+            ##### Fused-OP-3 end
+
+            # all_reduce
+            if self.nranks > 1:
+                dist.all_reduce(out_linear_out)
+
+            out_linear_out = residual_input + out_linear_out
+            residual_input = out_linear_out
+            
+            ##### Fused-OP-4 start
+
+            # compute_ffn_layernorm = post_attention_layernorm
+            hidden_states = fused_rms_norm(
+                    out_linear_out,                    # x           [1, 34, 4096]
+                    norm_weight=self.ffn_ln_scales[i], # norm_weight [4096]
+                    norm_bias=self.ffn_ln_biases[i],   #             None
+                    epsilon=self._epsilon,             # epsilon     1e-06
+                    begin_norm_axis=2,                 # compute_ffn_layernorm ---> 1
+                    bias=self.linear_biases[i],        #             None
+                    residual=residual_input,           # 
+            )[0]
+
+            # MLP
+            # compute_ffn1
+            # self.ffn1_weights[i].shape = [4096, 22016]
+            ffn1_out = paddle.matmul(hidden_states, self.ffn1_weights[i])
+            # ffn1_out.shape = [1, 34, 22016]
+            
+            # compute_activation
+            # def compute_baseline_output(self):
+            #     res_tmp = (self.x + self.bias).astype(self.dtype)
+            #     res_tmp_head = res_tmp[:, :, : self.cols // 2]
+            #     res_tmp_tail = res_tmp[:, :, self.cols // 2 :]
+            #     res_tmp_head_act = swish(res_tmp_head)
+            #     out = res_tmp_head_act * res_tmp_tail
+            #     return out
+            # self.ffn1_biases[i] = None
+            # self.activation = 'swiglu'
+            # ffn1_out = fused_bias_act(ffn1_out, self.ffn1_biases[i], act_method=self.activation)
+            if self.ffn1_biases[i] is not None:
+                ffn1_out = ffn1_out + self.ffn1_biases[i]
+            # ffn1_out.shape = [batch_size, seq_len, cols]
+            cols = ffn1_out.shape[2]   # 22016
+            res_tmp_head = ffn1_out[:, :, : cols // 2]
+            res_tmp_tail = ffn1_out[:, :, cols // 2 :]
+            ffn1_out = paddle.incubate.nn.functional.swiglu(res_tmp_head, res_tmp_tail)
+            # ffn1_out.shape = [1, 34, 11008]
+            # compute_ffn2
+            # self.ffn2_weights[i].shape = [11008, 4096]
+            ffn2_out = paddle.matmul(ffn1_out, self.ffn2_weights[i])
+            # ffn2_out.shape = [1, 34, 4096]
+
+            ##### Fused-OP-4 end
+
+            # all_reduce
+            if self.nranks > 1:
+                dist.all_reduce(ffn2_out)
+            
+            hidden_states = residual_input + ffn2_out
+            src = hidden_states
+            # end LlamaDecoderLayer
+            
+        kwargs["time_step"] = time_step
+        kwargs["multi_block_output"] = hidden_states
+        kwargs["seq_lens"] = seq_lens
+        kwargs["input_ids"] = input_ids
+
+        # hidden_states = [1, 34, 4096]
+        out = self.post_process(**kwargs)
+        # out = [1, 4096]
+        return out, caches

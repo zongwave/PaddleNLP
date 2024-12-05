@@ -47,9 +47,11 @@ from paddlenlp.experimental.transformers.fused_transformer_layers import (
     FusedMultiTransformerA8W8,
     FusedMultiTransformerAvx,
     FusedMultiTransformerBase,
+    FusedMultiTransformerHPU,
     FusedMultiTransformerConfig,
     FusedMultiTransformerWeightOnly,
     SpeculateConfig,
+    HpuConfig,
 )
 from paddlenlp.experimental.transformers.generation_utils import (
     GenerationAvxInferenceModel,
@@ -625,6 +627,11 @@ class LlamaInferenceModel(LlamaPretrainedModel):
             if hasattr(config, "speculate_max_draft_token_num")
             else 1,
         )
+
+        hpu_config = HpuConfig(
+            max_position_embeddings=self.max_position_embeddings,
+        )
+        
         transformer_config = FusedMultiTransformerConfig(
             embed_dim=self.hidden_size,
             num_heads=self.num_attention_heads,
@@ -675,6 +682,7 @@ class LlamaInferenceModel(LlamaPretrainedModel):
             trans_qkvw=(False if paddle.is_compiled_with_rocm() and "a8w8" in self.quant_type else True),
             append_attn=config.append_attn,
             speculate_config=speculate_config,
+            hpu_config=hpu_config,
         )
 
         self.set_transformer_block(transformer_config)
@@ -690,6 +698,8 @@ class LlamaInferenceModel(LlamaPretrainedModel):
             self.transformer_block = FusedMultiTransformerWeightOnly(transformer_config)
         elif "a8w8" in self.quant_type:
             self.transformer_block = FusedMultiTransformerA8W8(transformer_config)
+        elif paddle.is_compiled_with_custom_device("intel_hpu"):
+            self.transformer_block = FusedMultiTransformerHPU(transformer_config)
         else:
             self.transformer_block = FusedMultiTransformerBase(transformer_config)
 
@@ -768,7 +778,8 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         if past_key_values is None:
             past_key_values = tuple([None] * self.config.num_hidden_layers)
 
-        if not is_decoder:
+        # if not is_decoder:
+        if 0:
             ids_remove_padding, padding_offset, cum_offsets = self.remove_padding(input_ids, seq_len_encoder)
         else:
             ids_remove_padding = input_ids.squeeze(axis=1)
@@ -789,7 +800,13 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         position_offset = 0
         if not is_decoder and pre_caches is not None:
             position_offset = 128
-        from paddlenlp_ops import fused_get_rotary_embedding
+        # from paddlenlp_ops import fused_get_rotary_embedding
+
+        def fused_get_rotary_embedding(input_ids, position_ids, head_dim_shape_tensor, prompt_num, theta, use_neox):
+            max_seq_length = input_ids.shape[1]   # 31   #  1
+            # prompt_num                          #  0   # 31
+            position_ids = paddle.arange(prompt_num, prompt_num + max_seq_length, dtype="int64")
+            return position_ids
 
         new_rope = fused_get_rotary_embedding(
             input_ids, position_ids, self.head_dim_shape_tensor, position_offset, self.rope_theta, self.use_neox
