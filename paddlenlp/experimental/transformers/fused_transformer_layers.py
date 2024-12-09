@@ -22,9 +22,9 @@ import paddle
 import paddle.distributed as dist
 from paddle.framework import in_dynamic_mode
 from paddle.incubate.nn.functional import (
-    # fused_bias_act,
+    fused_bias_act,
     fused_layer_norm,
-    # fused_moe,
+    fused_moe,
     fused_rms_norm,
     masked_multihead_attention,
     variable_length_memory_efficient_attention,
