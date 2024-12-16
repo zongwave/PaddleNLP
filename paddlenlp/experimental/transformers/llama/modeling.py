@@ -92,7 +92,7 @@ class FusedLlamaRMSNorm(nn.Layer):
 
     def forward(self, hidden_states):
         result = paddle.incubate.nn.functional.fused_rms_norm(
-            hidden_states, self.weight, None, self.variance_epsilon, begin_norm_axis=1
+            hidden_states, self.weight, None, self.variance_epsilon, begin_norm_axis=2
         )
         if isinstance(result, tuple):
             return result[0]
