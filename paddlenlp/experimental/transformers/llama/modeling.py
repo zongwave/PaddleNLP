@@ -38,11 +38,11 @@ from paddlenlp.experimental.transformers.fused_transformer_layers import (
     FusedMultiTransformerA8W8,
     FusedMultiTransformerAvx,
     FusedMultiTransformerBase,
-    FusedMultiTransformerHPU,
     FusedMultiTransformerConfig,
+    FusedMultiTransformerHPU,
     FusedMultiTransformerWeightOnly,
-    SpeculateConfig,
     HpuConfig,
+    SpeculateConfig,
 )
 from paddlenlp.experimental.transformers.generation_utils import (
     GenerationAvxInferenceModel,
@@ -619,7 +619,7 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         hpu_config = HpuConfig(
             max_position_embeddings=self.max_position_embeddings,
         )
-        
+
         transformer_config = FusedMultiTransformerConfig(
             embed_dim=self.hidden_size,
             num_heads=self.num_attention_heads,
@@ -770,7 +770,8 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         if 0:
             ids_remove_padding, padding_offset, cum_offsets = self.remove_padding(input_ids, seq_len_encoder)
         else:
-            ids_remove_padding = input_ids.squeeze(axis=1)
+            # ids_remove_padding = input_ids.squeeze(axis=1)
+            ids_remove_padding = input_ids
             padding_offset = None
             cum_offsets = None
 
@@ -788,13 +789,7 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         position_offset = 0
         if not is_decoder and pre_caches is not None:
             position_offset = 128
-        # from paddlenlp_ops import fused_get_rotary_embedding
-
-        def fused_get_rotary_embedding(input_ids, position_ids, head_dim_shape_tensor, prompt_num, theta, use_neox):
-            max_seq_length = input_ids.shape[1]   # 31   #  1
-            # prompt_num                          #  0   # 31
-            position_ids = paddle.arange(prompt_num, prompt_num + max_seq_length, dtype="int64")
-            return position_ids
+        from paddlenlp_ops import fused_get_rotary_embedding
 
         new_rope = fused_get_rotary_embedding(
             input_ids, position_ids, self.head_dim_shape_tensor, position_offset, self.rope_theta, self.use_neox
