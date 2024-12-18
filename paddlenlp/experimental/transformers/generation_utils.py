@@ -48,23 +48,25 @@ class ForcedDecodingEOSTokenLogitsProcessor(LogitsProcessor):
             scores[:, self.forced_eos_token_id] = 0
         return scores
 
+
 def tensors_to_cpu(*tensors):
     return [tensor.cpu() for tensor in tensors]
+
 
 def tensors_to_device(device, *tensors):
     return [tensor.to(device) for tensor in tensors]
 
+
 def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
     if False:
         import paddlenlp_ops
+
         device = pre_ids_all.place
-        pre_ids_all, pre_ids, step_idx, stop_flags = tensors_to_cpu(
-            pre_ids_all, pre_ids, step_idx, stop_flags
-            )
+        pre_ids_all, pre_ids, step_idx, stop_flags = tensors_to_cpu(pre_ids_all, pre_ids, step_idx, stop_flags)
         stop_flags = paddlenlp_ops.set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags)
         stop_flags, pre_ids_all, pre_ids, step_idx, stop_flags = tensors_to_device(
             device, stop_flags, pre_ids_all, pre_ids, step_idx, stop_flags
-            )
+        )
         return stop_flags
     else:
         dim0, dim1 = pre_ids_all.shape
@@ -89,6 +91,7 @@ def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
 
         return stop_flags
 
+
 def min_length_logits_process(logits, cur_len, min_len, eos_token_id, bs, length, end_length):
     for bi in range(bs):
         if cur_len[bi] < 0:
@@ -96,6 +99,7 @@ def min_length_logits_process(logits, cur_len, min_len, eos_token_id, bs, length
         if cur_len[bi] < min_len[bi]:
             for i in range(end_length):
                 logits[bi, eos_token_id[i]] = -1e10
+
 
 def update_repeat_times(pre_ids, cur_len, repeat_times, bs, length_id):
     for bi in range(bs):
@@ -108,6 +112,7 @@ def update_repeat_times(pre_ids, cur_len, repeat_times, bs, length_id):
                 break
 
             repeat_times[bi][id] += 1
+
 
 def update_value_by_repeat_times(repeat_times, penalty_scores, frequency_score, presence_score, logits, bs, length):
     for bi in range(bs):
@@ -122,23 +127,55 @@ def update_value_by_repeat_times(repeat_times, penalty_scores, frequency_score, 
             logit_now = logit_now < 0 and logit_now * alpha or logit_now / alpha
             logits[bi][i] = logit_now - times * beta - gamma
 
-def ref_get_token_penalty_multi_scores(pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id):
+
+def ref_get_token_penalty_multi_scores(
+    pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id
+):
     if True:
         device = pre_ids.place
-        pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id = tensors_to_cpu(
+        (
+            pre_ids,
+            logits,
+            penalty_scores,
+            frequency_scores,
+            presence_scores,
+            cur_len,
+            min_len,
+            eos_token_id,
+        ) = tensors_to_cpu(
             pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id
-            )
+        )
         import paddlenlp_ops
+
         logits_out = paddlenlp_ops.get_token_penalty_multi_scores(
             pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id
-            )
-        logits_out, pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id = tensors_to_device(
-            device, logits_out, pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id
-            )
+        )
+        (
+            logits_out,
+            pre_ids,
+            logits,
+            penalty_scores,
+            frequency_scores,
+            presence_scores,
+            cur_len,
+            min_len,
+            eos_token_id,
+        ) = tensors_to_device(
+            device,
+            logits_out,
+            pre_ids,
+            logits,
+            penalty_scores,
+            frequency_scores,
+            presence_scores,
+            cur_len,
+            min_len,
+            eos_token_id,
+        )
         return logits_out
     else:
         shape = logits.shape
-        repeat_times = paddle.full(shape, 0, dtype='int32')
+        repeat_times = paddle.full(shape, 0, dtype="int32")
         bs = shape[0]
         length = shape[1]
         length_id = pre_ids.shape[1]
@@ -147,9 +184,12 @@ def ref_get_token_penalty_multi_scores(pre_ids, logits, penalty_scores, frequenc
 
         min_length_logits_process(logits_out, cur_len, min_len, eos_token_id, bs, length, end_length)
         update_repeat_times(pre_ids, cur_len, repeat_times, bs, length_id)
-        update_value_by_repeat_times(repeat_times, penalty_scores, frequency_scores, presence_scores, logits_out, bs, length)
+        update_value_by_repeat_times(
+            repeat_times, penalty_scores, frequency_scores, presence_scores, logits_out, bs, length
+        )
 
         return logits_out
+
 
 def ref_top_p_sampling(probs, top_p):
     sorted_probs = paddle.sort(probs, descending=True)
@@ -175,17 +215,18 @@ def ref_top_p_sampling(probs, top_p):
     next_tokens = paddle.multinomial(paddle.cast(probs, paddle.float32))
     return next_tokens
 
+
 def ref_set_stop_value_multi_ends(topk_ids, stop_flags, end_ids):
     import paddlenlp_ops
+
     place = topk_ids.place
     topk_ids, stop_flags, end_ids = tensors_to_cpu(topk_ids, stop_flags, end_ids)
-    result_topk_ids, result_stop_flags = paddlenlp_ops.set_stop_value_multi_ends(
-        topk_ids, stop_flags, end_ids
-        )
+    result_topk_ids, result_stop_flags = paddlenlp_ops.set_stop_value_multi_ends(topk_ids, stop_flags, end_ids)
     result_topk_ids, result_stop_flags, topk_ids, stop_flags, end_ids = tensors_to_device(
         place, result_topk_ids, result_stop_flags, topk_ids, stop_flags, end_ids
-        )
+    )
     return result_topk_ids, result_stop_flags
+
 
 class GenerationInferenceModel(GenerationMixin):
     @classmethod
@@ -343,7 +384,7 @@ class GenerationInferenceModel(GenerationMixin):
         model_kwargs["stop_flags"] = paddle.logical_or(model_kwargs["stop_flags"], length_cond)
         if cache is None:
             next_tokens = paddle.where(just_decoder, paddle.full_like(next_tokens, -1), next_tokens)
-        #from paddlenlp_ops import set_stop_value_multi_ends
+        # from paddlenlp_ops import set_stop_value_multi_ends
 
         next_tokens, model_kwargs["stop_flags"] = ref_set_stop_value_multi_ends(
             next_tokens, model_kwargs["stop_flags"], eos_token_id
@@ -365,13 +406,13 @@ class GenerationInferenceModel(GenerationMixin):
                 model_kwargs["tgt_pos"] = paddle.where(
                     just_decoder, model_kwargs["tgt_pos"], model_kwargs["tgt_pos"] + 1
                 )
-            '''
+            """
             model_kwargs["seq_len_decoder"] = paddle.where(
                 model_kwargs["stop_flags"],
                 model_kwargs["seq_len_decoder"] - model_kwargs["seq_len_decoder"],
                 model_kwargs["seq_len_decoder"],
             )
-            '''
+            """
             model_kwargs["seq_len_decoder"] = paddle.where(
                 model_kwargs["stop_flags"],
                 paddle.zeros_like(model_kwargs["seq_len_decoder"]),
@@ -402,9 +443,14 @@ class GenerationInferenceModel(GenerationMixin):
                 model_kwargs["seq_len_decoder"] + 1,
             )
 
+            # a = model_kwargs["seq_len_decoder"]
+            # Tensor(shape=[1, 1], dtype=int32, place=Place(intel_hpu:5), stop_gradient=True, [[65]])
+            # OSError: synLaunch() failed = 30
+
             model_kwargs["seq_len_decoder"] = paddle.where(
                 model_kwargs["stop_flags"],
-                model_kwargs["seq_len_decoder"] - model_kwargs["seq_len_decoder"],
+                # model_kwargs["seq_len_decoder"] - model_kwargs["seq_len_decoder"],
+                paddle.zeros_like(model_kwargs["seq_len_decoder"]),
                 model_kwargs["seq_len_decoder"],
             )
 
@@ -452,7 +498,7 @@ class GenerationInferenceModel(GenerationMixin):
                 )  # not update when continue decode
             else:
                 step_idx = model_kwargs["step_idx"]
-            #from paddlenlp_ops import set_value_by_flags_and_idx
+            # from paddlenlp_ops import set_value_by_flags_and_idx
 
             model_kwargs["stop_flags"] = ref_set_value_by_flags_and_idx(
                 model_kwargs["pre_ids"],
@@ -465,7 +511,7 @@ class GenerationInferenceModel(GenerationMixin):
             logits = paddle.cast(logits, paddle.float32)
             logits = logits_processors(model_kwargs["all_input_ids"], logits, decoding_step=step_idx_ori)
 
-            #from paddlenlp_ops import get_token_penalty_multi_scores
+            # from paddlenlp_ops import get_token_penalty_multi_scores
 
             logits = ref_get_token_penalty_multi_scores(
                 model_kwargs["pre_ids"],
@@ -511,7 +557,7 @@ class GenerationInferenceModel(GenerationMixin):
 
             from paddlenlp_ops import save_with_output
 
-            #TODO: remove below two lines, added just for debug
+            # TODO: remove below two lines, added just for debug
             batch_idx = paddle.full(shape=[1], dtype="int32", fill_value=-1)
             model_kwargs["batch_idx"] = batch_idx
 
@@ -844,7 +890,7 @@ class GenerationBlockInferenceModel(GenerationMixin):
 
             # TODO(Wanglongzhi2001): token_penalty of speculative decoding
             if not is_speculative_decoding:
-                #from paddlenlp_ops import set_preids_token_penalty_multi_scores
+                # from paddlenlp_ops import set_preids_token_penalty_multi_scores
 
                 ref_set_preids_token_penalty_multi_scores(
                     model_kwargs["pre_ids"],
@@ -1115,7 +1161,7 @@ class GenerationAvxInferenceModel(GenerationMixin):
         model_kwargs["stop_flags"] = paddle.logical_or(model_kwargs["stop_flags"], length_cond)
         if cache is None:
             next_tokens = paddle.where(just_decoder, paddle.full_like(next_tokens, -1), next_tokens)
-        #from paddlenlp_ops import set_stop_value_multi_ends
+        # from paddlenlp_ops import set_stop_value_multi_ends
 
         next_tokens, model_kwargs["stop_flags"] = ref_set_stop_value_multi_ends(
             next_tokens, model_kwargs["stop_flags"], eos_token_id
@@ -1186,7 +1232,7 @@ class GenerationAvxInferenceModel(GenerationMixin):
             else:
                 step_idx = model_kwargs["step_idx"]
 
-            #from paddlenlp_ops import set_value_by_flags_and_idx
+            # from paddlenlp_ops import set_value_by_flags_and_idx
 
             model_kwargs["stop_flags"] = ref_set_value_by_flags_and_idx(
                 model_kwargs["pre_ids"],
@@ -1198,7 +1244,7 @@ class GenerationAvxInferenceModel(GenerationMixin):
             logits = paddle.cast(logits, paddle.float32)
             logits = logits_processors(model_kwargs["all_input_ids"], logits, decoding_step=step_idx_ori)
 
-            #from paddlenlp_ops import get_token_penalty_multi_scores
+            # from paddlenlp_ops import get_token_penalty_multi_scores
 
             logits = get_token_penalty_multi_scores(
                 model_kwargs["pre_ids"],
