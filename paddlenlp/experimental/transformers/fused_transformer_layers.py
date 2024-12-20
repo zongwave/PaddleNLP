@@ -2979,16 +2979,23 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
 
         assert self.num_layers == len(self.qkv_weights)
 
-        residual_input = src
+        rotary_embs = rotary_embs.to(src.dtype)
+
+        q_seq_len = src.shape[-2]
+        kv_seq_len = caches[0][0].shape[-2]
+        if q_seq_len > 1:
+            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
+        else:
+            for i in range(src.shape[0]):
+                attn_mask[i, :, :, :seq_lens[0] + 1] = paddle.ones(shape=(1, 1, 1, seq_lens[0] + 1), dtype=src.dtype)
+            attention_mask = (attn_mask - 1) * 1e4
+
         import paddlenlp_ops
 
         for i in range(self.num_layers):
+            #pdb.set_trace()
 
-            rotary_embs = rotary_embs.to(src.dtype)
-
-            # if(len(src.shape) == 2):
-            #    src = src.unsqueeze(1)
-
+            residual_input = src
             query_states, key_states, value_states = paddlenlp_ops.fused_rms_qkv_rope_v2(
                 src, self.ln_scales[i], self.qkv_weights[i], rotary_embs, self._epsilon, self.head_dim, self.num_heads
             )
@@ -3000,19 +3007,16 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
                 caches[i][0][:, :, : key_states.shape[2], :] = key_states
                 caches[i][1][:, :, : value_states.shape[2], :] = value_states
             else:
-                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=seq_lens[0] - 1, source=key_states)
-                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=seq_lens[0] - 1, source=value_states)
+                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=seq_lens[0], source=key_states)
+                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=seq_lens[0], source=value_states)
             ##### Fused-OP-2 end
 
             ##### Fused-OP-3 start
-            q_seq_len = query_states.shape[-2]
-            kv_seq_len = key_states.shape[-2]
-            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
             # attention_mask = attention_mask.astype(query_states.dtype)
             out_linear_out = paddlenlp_ops.fused_sdpa_proj(
                 query_states,
-                key_states,
-                value_states,
+                caches[i][0],
+                caches[i][1],
                 attention_mask,
                 self.linear_weights[i],
                 scaling_factor=self.head_dim**-0.5,
@@ -3038,12 +3042,11 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             # all_reduce
             if self.nranks > 1:
                 dist.all_reduce(ffn2_out)
-            hidden_states = residual_input + ffn2_out
-            src = hidden_states
+            src = residual_input + ffn2_out
             # end LlamaDecoderLayer
 
         kwargs["time_step"] = time_step
-        kwargs["multi_block_output"] = hidden_states
+        kwargs["multi_block_output"] = src
         kwargs["seq_lens"] = seq_lens
         kwargs["input_ids"] = input_ids
 
