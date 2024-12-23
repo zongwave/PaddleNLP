@@ -77,7 +77,8 @@ if paddle.is_compiled_with_cuda():
 
 
 def rebuild_padding(tmp_out, padding_offset, seq_len_encoder, input_ids=0):
-    return tmp_out[:, -2:-1, :]
+    # return tmp_out[:, -2:-1, :]
+    return tmp_out[:, -1:, :]
 
 
 __all__ = [
@@ -2993,7 +2994,6 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         import paddlenlp_ops
 
         for i in range(self.num_layers):
-            #pdb.set_trace()
 
             residual_input = src
             query_states, key_states, value_states = paddlenlp_ops.fused_rms_qkv_rope_v2(
