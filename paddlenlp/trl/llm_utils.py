@@ -402,7 +402,8 @@ def dybatch_preprocess(
             tokens = tokenizer(
                 text,
                 return_tensors="np",
-                padding='max_length',
+                # padding='max_length',
+                padding=False,
                 max_length=src_length,
                 return_attention_mask=False,
                 return_token_type_ids=False,
