@@ -16,6 +16,9 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 
+import sys
+sys.path.append('../..')
+
 import paddle
 from paddle.distributed import fleet
 

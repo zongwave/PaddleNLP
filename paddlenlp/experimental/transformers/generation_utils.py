@@ -58,7 +58,7 @@ def tensors_to_device(device, *tensors):
 
 
 def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
-    if False:
+    if True:
         import paddlenlp_ops
 
         device = pre_ids_all.place
@@ -212,6 +212,8 @@ def ref_top_p_sampling(probs, top_p):
     )
     condition = paddle.cast(condition, "bool").reshape(probs.shape)
     probs = paddle.where(condition, paddle.full_like(probs, 0.0), probs)
+    if len(probs.shape) > 2:
+        probs = paddle.reshape(probs, [probs.shape[0], -1])
     next_tokens = paddle.multinomial(paddle.cast(probs, paddle.float32))
     return next_tokens
 
