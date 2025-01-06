@@ -78,7 +78,8 @@ def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
 
         valid_step_idx = paddle.where(step_idx >= 0, step_idx, 0)
         condition = (step_idx >= 0) & (~stop_flags)
-        dst_idx = paddle.arange(0, dim0) * dim1 + valid_step_idx
+        bsz = valid_step_idx.shape[0]
+        dst_idx = paddle.arange(0, bsz) * dim1 + valid_step_idx
         dst_idx = dst_idx[condition]
         src_idx = paddle.nonzero(condition)
         selected_elements = paddle.gather(pre_ids, src_idx)

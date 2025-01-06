@@ -312,7 +312,7 @@ def get_alibi_slopes(num_heads):
     return slopes.astype("float32")
 
 
-def pad_batch_data(insts, pad_id=0, return_seq_len=False, pad_style="right"):
+def pad_batch_data(insts, masks=None, pad_id=0, return_seq_len=False, pad_style="right"):
     """Pad sequences to the max sequence length in batch."""
     max_len = max(map(len, insts))
     if pad_style == "left":
@@ -320,9 +320,18 @@ def pad_batch_data(insts, pad_id=0, return_seq_len=False, pad_style="right"):
     else:
         inst_data = np.array([list(inst) + [pad_id] * (max_len - len(inst)) for inst in insts])
 
+    if masks is not None:
+        if pad_style == "left":
+            inst_mask = np.array([[0] * (max_len - len(inst)) + list(inst) for inst in masks])
+        else:
+            inst_mask = np.array([list(inst) + [0] * (max_len - len(inst)) for inst in masks])
+
     if return_seq_len:
         seq_len = np.array([len(inst) for inst in insts])
-        return inst_data.astype("int64").reshape([-1, max_len]), seq_len
+        if masks is None:
+            return inst_data.astype("int64").reshape([-1, max_len]), seq_len
+        else:
+            return inst_data.astype("int64").reshape([-1, max_len]), inst_mask.astype("int64").reshape([-1, max_len]), seq_len
     else:
         return inst_data.astype("int64").reshape([-1, max_len])
 
@@ -395,32 +404,68 @@ def dybatch_preprocess(
         inputs["position_ids"] = position_ids
     else:
         input_ids = []
+        attention_mask = []
         if isinstance(texts, str):
             texts = [texts]
 
-        for text in texts:
-            tokens = tokenizer(
-                text,
-                return_tensors="np",
-                # padding='max_length',
-                padding=False,
-                max_length=src_length,
-                return_attention_mask=False,
-                return_token_type_ids=False,
-                add_special_tokens=tokenizer.chat_template is None or isinstance(tokenizer, ChatGLMv2Tokenizer),
-            )
-            input_ids.append(tokens["input_ids"][0])
+        # padding=False
+        padding='max_length'
 
-        pad_token_id = tokenizer([tokenizer.pad_token], return_tensors="np")["input_ids"][0][-1]
-        inputs["input_ids"], seq_len = pad_batch_data(input_ids, pad_id=pad_token_id, return_seq_len=True)
-        bs = inputs["input_ids"].shape[0]
-        max_len = max(map(len, input_ids))
+        if padding is False:
+            for text in texts:
+                tokens = tokenizer(
+                    text,
+                    return_tensors="np",
+                    padding=False,
+                    max_length=src_length,
+                    return_attention_mask=False,
+                    return_token_type_ids=False,
+                    add_special_tokens=tokenizer.chat_template is None or isinstance(tokenizer, ChatGLMv2Tokenizer),
+                )
+                input_ids.append(tokens["input_ids"][0])
 
-        position_ids = paddle.zeros(shape=[bs, max_length + src_length], dtype="int64")
+            pad_token_id = tokenizer([tokenizer.pad_token], return_tensors="np")["input_ids"][0][-1]
+            inputs["input_ids"], seq_len = pad_batch_data(input_ids, pad_id=pad_token_id, return_seq_len=True)
+            bs = inputs["input_ids"].shape[0]
+            max_len = max(map(len, input_ids))
 
-        for i in range(bs):
-            position_ids[i, pre_caches_length : pre_caches_length + seq_len[i]] = paddle.arange(seq_len[i])
-        inputs["position_ids"] = position_ids
+            position_ids = paddle.zeros(shape=[bs, max_length + src_length], dtype="int64")
+
+            for i in range(bs):
+                position_ids[i, pre_caches_length : pre_caches_length + seq_len[i]] = paddle.arange(seq_len[i])
+            inputs["position_ids"] = position_ids
+
+        else:
+            return_attention_mask=True
+            #truncation=True
+            truncation=False
+            pad_style="left"
+            for text in texts:
+                tokens = tokenizer(
+                    text,
+                    return_tensors="np",
+                    padding=padding,
+                    max_length=src_length,
+                    truncation=truncation,
+                    return_attention_mask=return_attention_mask,
+                    return_token_type_ids=False,
+                    add_special_tokens=tokenizer.chat_template is None or isinstance(tokenizer, ChatGLMv2Tokenizer),
+                )
+                input_ids.append(tokens["input_ids"][0])
+                attention_mask.append(tokens["attention_mask"][0])
+
+            pad_token_id = tokenizer([tokenizer.pad_token], return_tensors="np")["input_ids"][0][-1]
+            inputs["input_ids"], inputs["attention_mask"], seq_len = pad_batch_data(input_ids, attention_mask, pad_id=pad_token_id, return_seq_len=True, pad_style=pad_style)
+            bs = inputs["input_ids"].shape[0]
+            max_len = max(map(len, input_ids))
+
+            position_ids = paddle.zeros(shape=[bs, max_length + src_length], dtype="int64")
+
+            for i in range(bs):
+                position_ids[i, pre_caches_length + max_len - seq_len[i] : pre_caches_length + max_len] = paddle.arange(seq_len[i])
+                seq_len[i] = max_len
+            inputs["position_ids"] = position_ids
+
 
     tgt_ids = [input[-1:] for input in input_ids]
     tgt_pos = []

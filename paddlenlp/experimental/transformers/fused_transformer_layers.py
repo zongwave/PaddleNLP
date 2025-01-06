@@ -2972,24 +2972,14 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         time_step=None,
         **kwargs,
     ):
-        # TODO 1: caches update
-        # TODO 2: RmsNormKernel optional residual_input not realized
-        # TODO 3: RmsNormKernel begin_norm_axis = hidden_states.dim() - 1
         if caches is not None:
             assert len(caches) == len(self.qkv_weights) or len(caches) == 2 * len(self.qkv_weights)
 
         assert self.num_layers == len(self.qkv_weights)
 
         rotary_embs = rotary_embs.to(src.dtype)
-
-        q_seq_len = src.shape[-2]
-        kv_seq_len = caches[0][0].shape[-2]
-        if q_seq_len > 1:
-            attention_mask = attn_mask[..., :q_seq_len, :kv_seq_len]
-        else:
-            for i in range(src.shape[0]):
-                attn_mask[i, :, :, :seq_lens[0] + 1] = paddle.ones(shape=(1, 1, 1, seq_lens[0] + 1), dtype=src.dtype)
-            attention_mask = (attn_mask - 1) * 1e4
+        batch_size = src.shape[0]
+        attention_mask = attn_mask
 
         import paddlenlp_ops
 
@@ -3004,20 +2994,19 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                caches[i][0][:, :, : key_states.shape[2], :] = key_states
-                caches[i][1][:, :, : value_states.shape[2], :] = value_states
+                caches[i][0][:batch_size, :, : key_states.shape[2], :] = key_states
+                caches[i][1][:batch_size, :, : value_states.shape[2], :] = value_states
             else:
-                paddlenlp_ops.index_copy(input=caches[i][0], dim=2, index=seq_lens[0], source=key_states)
-                paddlenlp_ops.index_copy(input=caches[i][1], dim=2, index=seq_lens[0], source=value_states)
+                paddlenlp_ops.index_copy(input=caches[i][0][:batch_size], dim=2, index=seq_lens[0], source=key_states)
+                paddlenlp_ops.index_copy(input=caches[i][1][:batch_size], dim=2, index=seq_lens[0], source=value_states)
             ##### Fused-OP-2 end
 
             ##### Fused-OP-3 start
-            # attention_mask = attention_mask.astype(query_states.dtype)
             out_linear_out = paddlenlp_ops.fused_sdpa_proj(
                 query_states,
-                caches[i][0],
-                caches[i][1],
-                attention_mask,
+                caches[i][0][:batch_size],
+                caches[i][1][:batch_size],
+                attn_mask,
                 self.linear_weights[i],
                 scaling_factor=self.head_dim**-0.5,
             )

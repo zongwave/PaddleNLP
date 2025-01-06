@@ -1620,11 +1620,17 @@ class LlamaForCausalLMInferenceModel(GenerationInferenceModel, LlamaPretrainedMo
         if cache is not None:
             input_ids = tgt_ids
             position_ids = tgt_pos
-            attention_mask = (tgt_generation_mask - 1) * 1e4
+            # kv_seq_len = cache_kvs[0].shape[-2]
+            # attention_mask = attention_mask[..., seq_len_decoder[0]:seq_len_decoder[0]+1, :kv_seq_len]
+            attention_mask = paddle.index_select(x=attention_mask, index=paddle.to_tensor([seq_len_decoder[0]]), axis=-2)
+            attention_mask = (attention_mask - 1) * 1e4
             # make inputs_embeds be none in decoder phase.
             # in forward function, it will be assigned according to input_ids.
             inputs_embeds = None
         else:
+            q_seq_len = input_ids.shape[-1]
+            kv_seq_len = cache_kvs[0].shape[-2]
+            attention_mask = attention_mask[..., :q_seq_len, :kv_seq_len]
             attention_mask = (attention_mask - 1) * 1e4
         model_inputs = {
             "input_ids": input_ids,
