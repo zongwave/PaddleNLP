@@ -2986,7 +2986,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         for i in range(self.num_layers):
 
             residual_input = src
-            query_states, key_states, value_states = paddlenlp_ops.fused_rms_qkv_rope_v2(
+            query_states, key_value_states = paddlenlp_ops.fused_rms_qkv_rope_v3(
                 src, self.ln_scales[i], self.qkv_weights[i], rotary_embs, self._epsilon, self.head_dim, self.num_heads
             )
             ##### Fused-OP-1 end
@@ -2994,18 +2994,22 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                caches[i][0][:batch_size, :, : key_states.shape[2], :] = key_states
-                caches[i][1][:batch_size, :, : value_states.shape[2], :] = value_states
+                # caches[i][0][:batch_size, :, : key_states.shape[2], :] = key_states
+                # caches[i][1][:batch_size, :, : value_states.shape[2], :] = value_states
+                caches[i][..., : key_value_states.shape[3], :] = key_value_states
             else:
-                paddlenlp_ops.index_copy(input=caches[i][0][:batch_size], dim=2, index=seq_lens[0], source=key_states)
-                paddlenlp_ops.index_copy(input=caches[i][1][:batch_size], dim=2, index=seq_lens[0], source=value_states)
+                # paddlenlp_ops.index_copy(input=caches[i][0][:batch_size], dim=2, index=seq_lens[0], source=key_states)
+                # paddlenlp_ops.index_copy(input=caches[i][1][:batch_size], dim=2, index=seq_lens[0], source=value_states)
+                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=seq_lens[0], source=key_value_states)
+
             ##### Fused-OP-2 end
 
             ##### Fused-OP-3 start
-            out_linear_out = paddlenlp_ops.fused_sdpa_proj(
+            out_linear_out = paddlenlp_ops.fused_sdpa_proj_v2(
                 query_states,
-                caches[i][0][:batch_size],
-                caches[i][1][:batch_size],
+                # caches[i][0][:batch_size],
+                # caches[i][1][:batch_size],
+                caches[i],
                 attn_mask,
                 self.linear_weights[i],
                 scaling_factor=self.head_dim**-0.5,
