@@ -57,8 +57,8 @@ def tensors_to_device(device, *tensors):
     return [tensor.to(device) for tensor in tensors]
 
 
-def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags):
-    if False:
+def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags, use_cpu=True):
+    if use_cpu:
         import paddlenlp_ops
 
         device = pre_ids_all.place
@@ -130,9 +130,9 @@ def update_value_by_repeat_times(repeat_times, penalty_scores, frequency_score, 
 
 
 def ref_get_token_penalty_multi_scores(
-    pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id
+    pre_ids, logits, penalty_scores, frequency_scores, presence_scores, cur_len, min_len, eos_token_id, use_cpu=True
 ):
-    if True:
+    if use_cpu:
         device = pre_ids.place
         (
             pre_ids,
@@ -192,29 +192,33 @@ def ref_get_token_penalty_multi_scores(
         return logits_out
 
 
-def ref_top_p_sampling(probs, top_p):
-    sorted_probs = paddle.sort(probs, descending=True)
-    sorted_indices = paddle.argsort(probs, descending=True)
-    cumulative_probs = paddle.cumsum(sorted_probs, axis=-1)
+def ref_top_p_sampling(probs, top_p, use_cpu=True):
+    if use_cpu:
+        _, next_tokens = paddle.tensor.top_p_sampling(probs, top_p)
+        return next_tokens
+    else:
+        sorted_probs = paddle.sort(probs, descending=True)
+        sorted_indices = paddle.argsort(probs, descending=True)
+        cumulative_probs = paddle.cumsum(sorted_probs, axis=-1)
 
-    # Remove tokens with cumulative probs above the top_p, But keep at
-    # least min_tokens_to_keep tokens
-    sorted_indices_to_remove = cumulative_probs > top_p
+        # Remove tokens with cumulative probs above the top_p, But keep at
+        # least min_tokens_to_keep tokens
+        sorted_indices_to_remove = cumulative_probs > top_p
 
-    # Keep the first token
-    sorted_indices_to_remove = paddle.cast(sorted_indices_to_remove, dtype="int64")
-    sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
-    sorted_indices_to_remove[:, 0] = 0
+        # Keep the first token
+        sorted_indices_to_remove = paddle.cast(sorted_indices_to_remove, dtype="int64")
+        sorted_indices_to_remove[:, 1:] = sorted_indices_to_remove[:, :-1].clone()
+        sorted_indices_to_remove[:, 0] = 0
 
-    # Scatter sorted tensors to original indexing
-    sorted_indices = sorted_indices + paddle.arange(probs.shape[0]).unsqueeze(-1) * probs.shape[-1]
-    condition = paddle.scatter(
-        sorted_indices_to_remove.flatten(), sorted_indices.flatten(), sorted_indices_to_remove.flatten()
-    )
-    condition = paddle.cast(condition, "bool").reshape(probs.shape)
-    probs = paddle.where(condition, paddle.full_like(probs, 0.0), probs)
-    next_tokens = paddle.multinomial(paddle.cast(probs, paddle.float32))
-    return next_tokens
+        # Scatter sorted tensors to original indexing
+        sorted_indices = sorted_indices + paddle.arange(probs.shape[0]).unsqueeze(-1) * probs.shape[-1]
+        condition = paddle.scatter(
+            sorted_indices_to_remove.flatten(), sorted_indices.flatten(), sorted_indices_to_remove.flatten()
+        )
+        condition = paddle.cast(condition, "bool").reshape(probs.shape)
+        probs = paddle.where(condition, paddle.full_like(probs, 0.0), probs)
+        next_tokens = paddle.multinomial(paddle.cast(probs, paddle.float32))
+        return next_tokens
 
 
 def ref_set_stop_value_multi_ends(topk_ids, stop_flags, end_ids):
@@ -535,13 +539,7 @@ class GenerationInferenceModel(GenerationMixin):
 
                 next_tokens = top_p_sampling_reject(probs, top_p, 0)
             else:
-                device = probs.place
-                probs = probs.cpu()
-                top_p = top_p.cpu()
                 next_tokens = ref_top_p_sampling(probs, top_p)
-                probs = probs.to(device)
-                top_p = top_p.to(device)
-                next_tokens = next_tokens.to(device)
 
             if self.config.tensor_parallel_degree > 1:
                 paddle.distributed.broadcast(next_tokens, 0)
