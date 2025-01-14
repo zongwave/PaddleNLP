@@ -69,64 +69,50 @@ def ref_set_value_by_flags_and_idx(pre_ids_all, pre_ids, step_idx, stop_flags, u
         )
         return stop_flags
     else:
-        dim0, dim1 = pre_ids_all.shape
-
-        pre_ids_all.flatten_()
-        step_idx.flatten_()
-        stop_flags.flatten_()
-        pre_ids.flatten_()
-
-        valid_step_idx = paddle.where(step_idx >= 0, step_idx, 0)
-        condition = (step_idx >= 0) & (~stop_flags)
-        bsz = valid_step_idx.shape[0]
-        dst_idx = paddle.arange(0, bsz) * dim1 + valid_step_idx
-        dst_idx = dst_idx[condition]
-        src_idx = paddle.nonzero(condition)
-        selected_elements = paddle.gather(pre_ids, src_idx)
-        pre_ids_all.scatter_(dst_idx, selected_elements)
-
-        paddle.reshape_(pre_ids_all, [dim0, dim1])
-        step_idx.unsqueeze_(axis=-1)
-        stop_flags.unsqueeze_(axis=-1)
-        pre_ids.unsqueeze_(axis=-1)
-
+        condition = step_idx >= paddle.to_tensor([0])
+        idx = paddle.nonzero(condition)
+        append_slot = step_idx[idx[0][0]].item()
+        orig_ids = pre_ids_all[:, append_slot].unsqueeze(1)
+        combined_ids = paddle.where(stop_flags, orig_ids, pre_ids)
+        pre_ids_all[:, append_slot] = combined_ids.squeeze(-1)
         return stop_flags
 
 
 def min_length_logits_process(logits, cur_len, min_len, eos_token_id, bs, length, end_length):
-    for bi in range(bs):
-        if cur_len[bi] < 0:
-            continue
-        if cur_len[bi] < min_len[bi]:
-            for i in range(end_length):
-                logits[bi, eos_token_id[i]] = -1e10
+    less_than_min_len = cur_len < min_len
+    mask = less_than_min_len.expand_as(logits)
+
+    for i in range(end_length):
+        logits[mask[:, 0], eos_token_id[i]] = -1e10
 
 
 def update_repeat_times(pre_ids, cur_len, repeat_times, bs, length_id):
-    for bi in range(bs):
-        if cur_len[bi] < 0:
-            continue
+    dim0, dim1 = repeat_times.shape
+    repeat_times.flatten_()
 
-        for i in range(length_id):
-            id = pre_ids[bi][i]
-            if id < 0:
-                break
+    mask = cur_len >= 0
+    mask = mask & (pre_ids >= 0)
 
-            repeat_times[bi][id] += 1
+    linear_idx = paddle.arange(0, dim0) * dim1
+    linear_idx.unsqueeze_(-1)
+
+    selected_idx = pre_ids + linear_idx
+    selected_idx = selected_idx[mask]
+    selected_idx.flatten_()
+
+    ones = paddle.ones_like(selected_idx, dtype="int32")
+
+    repeat_times.scatter_(selected_idx, ones, overwrite=False)
+
+    paddle.reshape_(repeat_times, [dim0, dim1])
 
 
 def update_value_by_repeat_times(repeat_times, penalty_scores, frequency_score, presence_score, logits, bs, length):
-    for bi in range(bs):
-        alpha = penalty_scores[bi]
-        beta = frequency_score[bi]
-        gamma = presence_score[bi]
-        for i in range(length):
-            times = repeat_times[bi][i]
-            if times == 0:
-                continue
-            logit_now = logits[bi][i]
-            logit_now = logit_now < 0 and logit_now * alpha or logit_now / alpha
-            logits[bi][i] = logit_now - times * beta - gamma
+    logits_now = paddle.empty_like(logits)
+    repeat_times_cast = paddle.cast(repeat_times, dtype=logits.dtype)
+    logits_now = paddle.where(logits < 0, logits * penalty_scores, logits / penalty_scores)
+    logits_now = logits_now - repeat_times_cast * frequency_score - presence_score
+    logits = paddle.where(repeat_times == 0, logits, logits_now)
 
 
 def ref_get_token_penalty_multi_scores(
@@ -889,9 +875,9 @@ class GenerationBlockInferenceModel(GenerationMixin):
 
             # TODO(Wanglongzhi2001): token_penalty of speculative decoding
             if not is_speculative_decoding:
-                # from paddlenlp_ops import set_preids_token_penalty_multi_scores
+                from paddlenlp_ops import set_preids_token_penalty_multi_scores
 
-                ref_set_preids_token_penalty_multi_scores(
+                set_preids_token_penalty_multi_scores(
                     model_kwargs["pre_ids"],
                     model_kwargs["input_ids"],
                     model_kwargs["seq_lens_encoder"],
@@ -1202,7 +1188,6 @@ class GenerationAvxInferenceModel(GenerationMixin):
         **model_kwargs,
     ):
         step_idx_ori = paddle.full(shape=[1], dtype="int64", fill_value=1)
-        batch_idx = paddle.full(shape=[1], dtype="int32", fill_value=-1)
 
         # fake temp next_tokens
         batch = input_ids.shape[0] if input_ids is not None else inputs_embeds.shape[0]
@@ -1245,7 +1230,7 @@ class GenerationAvxInferenceModel(GenerationMixin):
 
             # from paddlenlp_ops import get_token_penalty_multi_scores
 
-            logits = get_token_penalty_multi_scores(
+            logits = ref_get_token_penalty_multi_scores(
                 model_kwargs["pre_ids"],
                 logits,
                 model_kwargs["penalty_score"],
