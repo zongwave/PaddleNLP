@@ -3000,7 +3000,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             else:
                 # paddlenlp_ops.index_copy(input=caches[i][0][:batch_size], dim=2, index=seq_lens[0], source=key_states)
                 # paddlenlp_ops.index_copy(input=caches[i][1][:batch_size], dim=2, index=seq_lens[0], source=value_states)
-                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=seq_lens[0], source=key_value_states)
+                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=paddle.max(seq_lens, axis=0), source=key_value_states)
 
             ##### Fused-OP-2 end
 
