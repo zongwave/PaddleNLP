@@ -528,7 +528,8 @@ class GenerationInferenceModel(GenerationMixin):
                 next_tokens = ref_top_p_sampling(probs, top_p)
 
             if self.config.tensor_parallel_degree > 1:
-                paddle.distributed.broadcast(next_tokens, 0)
+                paddle.distributed.broadcast(next_tokens.to(dtype="bfloat16"), 0)
+            next_tokens = next_tokens.to(dtype="int64")
 
             model_kwargs = self.update_model_kwargs_for_generation(
                 cache, just_decoder, next_tokens, eos_token_id, model_kwargs

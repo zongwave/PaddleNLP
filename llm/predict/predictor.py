@@ -1479,8 +1479,14 @@ def benchmark(predictor, predictor_args, model_args):
     output_tokens = 0
     for _ in range(test_time):
         for bs, batch_source_text in enumerate(batch_benchmark_texts):
-            outputs, batch_tokens = predictor.predict(batch_source_text, return_tokens=True)
-            output_tokens += sum([len(tokens) for tokens in batch_tokens])
+            if paddle.distributed.get_rank() == 0:
+                outputs, batch_tokens = predictor.predict(batch_source_text, return_tokens=True)
+                output_tokens += sum([len(tokens) for tokens in batch_tokens])
+            else:
+                outputs = predictor.predict(batch_source_text)
+
+    if outputs == None:
+        return
     end = time.perf_counter()
     print("Avg Elapse time is: ", (end - start) / test_time)
     print("Output tokens is: ", output_tokens)
