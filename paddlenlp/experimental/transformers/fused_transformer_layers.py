@@ -2978,8 +2978,9 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         assert self.num_layers == len(self.qkv_weights)
 
         rotary_embs = rotary_embs.to(src.dtype)
-        batch_size = src.shape[0]
         attention_mask = attn_mask
+        prefill_length = src.shape[1]
+        position = paddle.max(seq_lens, axis=0)
 
         import paddlenlp_ops
 
@@ -2994,13 +2995,9 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             ##### Fused-OP-2 start
             # write cache kv (inplace)
             if time_step is None:  # context
-                # caches[i][0][:batch_size, :, : key_states.shape[2], :] = key_states
-                # caches[i][1][:batch_size, :, : value_states.shape[2], :] = value_states
-                caches[i][..., : key_value_states.shape[3], :] = key_value_states
+                caches[i][..., : prefill_length, :] = key_value_states
             else:
-                # paddlenlp_ops.index_copy(input=caches[i][0][:batch_size], dim=2, index=seq_lens[0], source=key_states)
-                # paddlenlp_ops.index_copy(input=caches[i][1][:batch_size], dim=2, index=seq_lens[0], source=value_states)
-                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=paddle.max(seq_lens, axis=0), source=key_value_states)
+                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=key_value_states)
 
             ##### Fused-OP-2 end
 
