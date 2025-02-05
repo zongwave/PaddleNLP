@@ -91,10 +91,9 @@ class FusedLlamaRMSNorm(nn.Layer):
         self.config = config
 
     def forward(self, hidden_states):
-        result = paddle.incubate.nn.functional.fused_rms_norm(
-            hidden_states, self.weight, None, self.variance_epsilon, begin_norm_axis=2
-        )
-        return result[0].squeeze(axis=1)
+        return paddle.incubate.nn.functional.fused_rms_norm(
+            hidden_states, self.weight, None, self.variance_epsilon, begin_norm_axis=1
+        )[0]
 
 
 class LLamaAvxLMHead(nn.Layer):
@@ -764,11 +763,10 @@ class LlamaInferenceModel(LlamaPretrainedModel):
         if past_key_values is None:
             past_key_values = tuple([None] * self.config.num_hidden_layers)
 
-        # if not is_decoder:
-        if 0:
+        if not is_decoder:
             ids_remove_padding, padding_offset, cum_offsets = self.remove_padding(input_ids, seq_len_encoder)
         else:
-            ids_remove_padding = input_ids
+            ids_remove_padding = input_ids.squeeze(axis=1)
             padding_offset = None
             cum_offsets = None
 

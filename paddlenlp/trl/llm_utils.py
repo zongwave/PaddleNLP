@@ -462,7 +462,7 @@ def dybatch_preprocess(
             position_ids = paddle.zeros(shape=[bs, max_length + src_length], dtype="int64")
 
             for i in range(bs):
-                position_ids[i, pre_caches_length + max_len - seq_len[i] : pre_caches_length + max_len] = paddle.arange(seq_len[i])
+                position_ids[i, pre_caches_length + max_len - seq_len[i] : pre_caches_length + max_len] = paddle.arange(seq_len[i]).unsqueeze(axis=0)
                 seq_len[i] = max_len
             inputs["position_ids"] = position_ids
 

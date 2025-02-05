@@ -2982,6 +2982,9 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         prefill_length = src.shape[1]
         position = paddle.max(seq_lens, axis=0)
 
+        if len(src.shape) == 2:
+            src = src.unsqueeze(axis=1)
+
         import paddlenlp_ops
 
         for i in range(self.num_layers):
@@ -2996,22 +2999,25 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
             # write cache kv (inplace)
             if time_step is None:  # context
                 caches[i][..., : prefill_length, :] = key_value_states
+                out_linear_out = paddlenlp_ops.fused_sdpa_proj_v2(
+                    query_states,
+                    # caches[i][0][:batch_size],
+                    # caches[i][1][:batch_size],
+                    caches[i],
+                    attn_mask,
+                    self.linear_weights[i],
+                    scaling_factor=self.head_dim**-0.5,
+                )
             else:
                 paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=key_value_states)
-
+                out_linear_out = paddlenlp_ops.fused_sdpa_dec_proj(
+                    query_states,
+                    caches[i],
+                    attn_mask,
+                    self.linear_weights[i],
+                    scaling_factor=self.head_dim**-0.5,
+                )
             ##### Fused-OP-2 end
-
-            ##### Fused-OP-3 start
-            out_linear_out = paddlenlp_ops.fused_sdpa_proj_v2(
-                query_states,
-                # caches[i][0][:batch_size],
-                # caches[i][1][:batch_size],
-                caches[i],
-                attn_mask,
-                self.linear_weights[i],
-                scaling_factor=self.head_dim**-0.5,
-            )
-            ##### Fused-OP-3 end
 
             # all_reduce
             if self.nranks > 1:
@@ -3043,6 +3049,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
         # hidden_states = [1, 34, 4096]
         out = self.post_process(**kwargs)
         # out = [1, 4096]
+        out = out.squeeze(axis=1)
         return out, caches
 
 
