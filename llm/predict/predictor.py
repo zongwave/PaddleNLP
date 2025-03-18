@@ -239,6 +239,7 @@ class BasePredictor:
 
     def predict(self, input_texts: str | list[str], return_tokens=False):
         tokenized_source = self._preprocess(input_texts)
+        paddle.device.synchronize()
         predictions = self._infer(tokenized_source)
         decoded_predictions = self._postprocess(predictions, return_tokens=return_tokens)
         return decoded_predictions
