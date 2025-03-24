@@ -3010,7 +3010,7 @@ class FusedMultiTransformerHPU(FusedMultiTransformerBase):
                     scaling_factor=self.head_dim**-0.5,
                 )
             else:
-                paddlenlp_ops.index_copy(input=caches[i], dim=3, index=position, source=key_value_states)
+                paddlenlp_ops.index_copy_(input=caches[i], dim=3, index=position, source=key_value_states)
                 out_linear_out = paddlenlp_ops.fused_sdpa_dec_proj(
                     query_states,
                     caches[i],
@@ -3171,10 +3171,10 @@ class FusedMultiTransformerHPU_ref(FusedMultiTransformerBase):
             else:
                 import paddlenlp_ops
 
-                paddlenlp_ops.index_copy(
+                paddlenlp_ops.index_copy_(
                     input=caches[i][0], dim=2, index=seq_lens[0] - 1, source=key_states.transpose([0, 2, 1, 3])
                 )
-                paddlenlp_ops.index_copy(
+                paddlenlp_ops.index_copy_(
                     input=caches[i][1], dim=2, index=seq_lens[0] - 1, source=value_states.transpose([0, 2, 1, 3])
                 )
 
