@@ -166,9 +166,9 @@ def ref_top_p_sampling(probs, top_p, use_cpu=True):
         return next_tokens
 
 
-def ref_set_stop_value_multi_ends(topk_ids, stop_flags, end_ids):
+def ref_set_stop_value_multi_ends(topk_ids, stop_flags, end_ids, mode=2):
     import paddlenlp_ops
-    result_topk_ids, result_stop_flags = paddlenlp_ops.set_stop_value_multi_ends(topk_ids, stop_flags, end_ids)
+    result_topk_ids, result_stop_flags = paddlenlp_ops.set_stop_value_multi_ends(topk_ids, stop_flags, end_ids, mode)
     return result_topk_ids, result_stop_flags
 
 
